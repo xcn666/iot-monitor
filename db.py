@@ -80,7 +80,9 @@ def recent_alerts(limit=10):
 
 def stats():
     conn = get_conn()
-    row = conn.execute("SELECT COUNT(*), AVG(temp), MAX(temp), MIN(temp), AVG(hum) FROM readings").fetchone()
+    row = conn.execute(
+        "SELECT COUNT(*), AVG(temp), MAX(temp), MIN(temp), AVG(hum), MAX(hum), MIN(hum) FROM readings"
+    ).fetchone()
     alert_cnt = conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0]
     conn.close()
     return {
@@ -89,6 +91,8 @@ def stats():
         "max_temp": row[2],
         "min_temp": row[3],
         "avg_hum": round(row[4], 2) if row[4] is not None else None,
+        "max_hum": row[5],
+        "min_hum": row[6],
         "alert_count": alert_cnt or 0,
     }
 
@@ -104,6 +108,8 @@ def daily_stats(day):
         "max_temp": row[2],
         "min_temp": row[3],
         "avg_hum": round(row[4], 2) if row[4] is not None else None,
+        "max_hum": row[5],
+        "min_hum": row[6],
     }
 
 if __name__ == "__main__":
