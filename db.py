@@ -2,6 +2,7 @@
 # db.py - SQLite 数据存储模块(数据 + 告警)
 import os
 import sqlite3
+from datetime import datetime
 
 DB_PATH = os.path.expanduser("~/iot-lab/logs/sensor.db")
 
@@ -14,12 +15,19 @@ def init_db():
     conn.execute("""
         CREATE TABLE IF NOT EXISTS readings (
             id     INTEGER PRIMARY KEY AUTOINCREMENT,
+            day    TEXT,
             time   TEXT,
             temp   REAL,
             hum    INTEGER,
             device TEXT
         )
     """)
+    # 数据库迁移: 老版本的表没有 day 列, 自动补上
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(readings)").fetchall()]
+    if "day" not in cols:
+        conn.execute("ALTER TABLE readings ADD COLUMN day TEXT")
+        conn.execute("UPDATE readings SET day = ? WHERE day IS NULL",
+                     (datetime.now().strftime("%Y-%m-%d"),))
     conn.execute("""
         CREATE TABLE IF NOT EXISTS alerts (
             id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,8 +42,10 @@ def init_db():
 
 def insert_reading(time_str, temp, hum, device=""):
     conn = get_conn()
-    conn.execute("INSERT INTO readings (time, temp, hum, device) VALUES (?, ?, ?, ?)",
-                 (time_str, temp, hum, device))
+    conn.execute(
+        "INSERT INTO readings (day, time, temp, hum, device) VALUES (?, ?, ?, ?, ?)",
+        (datetime.now().strftime("%Y-%m-%d"), time_str, temp, hum, device),
+    )
     conn.commit()
     conn.close()
 
@@ -52,6 +62,13 @@ def recent(limit=30):
                         (limit,)).fetchall()
     conn.close()
     rows.reverse()
+    return [{"time": r[0], "temp": r[1], "hum": r[2], "device": r[3]} for r in rows]
+
+def all_rows():
+    """全部数据(导出用)"""
+    conn = get_conn()
+    rows = conn.execute("SELECT time, temp, hum, device FROM readings ORDER BY id").fetchall()
+    conn.close()
     return [{"time": r[0], "temp": r[1], "hum": r[2], "device": r[3]} for r in rows]
 
 def recent_alerts(limit=10):
@@ -75,7 +92,21 @@ def stats():
         "alert_count": alert_cnt or 0,
     }
 
+def daily_stats(day):
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT COUNT(*), AVG(temp), MAX(temp), MIN(temp), AVG(hum) FROM readings WHERE day = ?",
+        (day,)).fetchone()
+    conn.close()
+    return {
+        "count": row[0] or 0,
+        "avg_temp": round(row[1], 2) if row[1] is not None else None,
+        "max_temp": row[2],
+        "min_temp": row[3],
+        "avg_hum": round(row[4], 2) if row[4] is not None else None,
+    }
+
 if __name__ == "__main__":
     init_db()
-    print("数据库初始化完成:", DB_PATH)
+    print("数据库初始化/迁移完成:", DB_PATH)
     print("统计:", stats())

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # dashboard.py - 网页实时监测大屏(SQLite + 告警)
+import csv as csv_mod
+import io
 import json
 import threading
 import time
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, Response, jsonify, render_template_string, request
 import paho.mqtt.client as mqtt
 import db
 
@@ -81,11 +83,17 @@ PAGE = """<!DOCTYPE html>
   .box h3 { font-size:14px; color:#94a3b8; margin:0 0 10px; }
   .alert-item { padding:8px 10px; margin-bottom:6px; border-radius:8px; background:#450a0a; border-left:4px solid #ef4444; font-size:13px; }
   .empty { color:#64748b; font-size:13px; }
+  .btn { background:#2563eb; color:#fff; padding:8px 16px; border-radius:8px;
+         text-decoration:none; font-size:14px; }
+  .btn:hover { background:#1d4ed8; }
   #tempCard.warn { outline:2px solid #ef4444; }
 </style>
 </head>
 <body>
-<h1>物联网温湿度监测大屏</h1>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+  <h1 style="margin:0;">物联网温湿度监测大屏</h1>
+  <a class="btn" href="/api/export">下载 CSV 数据</a>
+</div>
 <div class="cards">
   <div class="card" id="tempCard"><div class="label">当前温度</div><div class="value red"><span id="temp">--</span> C</div></div>
   <div class="card"><div class="label">当前湿度</div><div class="value blue"><span id="hum">--</span> %</div></div>
@@ -171,6 +179,18 @@ def api_stats():
 @app.route("/api/alerts")
 def api_alerts():
     return jsonify(db.recent_alerts(request.args.get("limit", 10, type=int)))
+
+@app.route("/api/export")
+def api_export():
+    """把全部数据导出为 CSV 文件下载"""
+    rows = db.all_rows()
+    buf = io.StringIO()
+    w = csv_mod.writer(buf)
+    w.writerow(["time", "temp", "hum", "device"])
+    for r in rows:
+        w.writerow([r["time"], r["temp"], r["hum"], r["device"]])
+    return Response(buf.getvalue(), mimetype="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": "attachment; filename=readings.csv"})
 
 if __name__ == "__main__":
     print("大屏已启动: http://localhost:5000", flush=True)
