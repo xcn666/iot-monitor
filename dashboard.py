@@ -8,6 +8,7 @@ import time
 from flask import Flask, Response, jsonify, render_template_string, request
 import paho.mqtt.client as mqtt
 import db
+import notify
 
 BROKER = "localhost"
 PORT = 1883
@@ -45,7 +46,9 @@ def on_message(client, userdata, msg):
             if now - last >= ALERT_COOLDOWN:
                 last_alert[device] = now
                 db.insert_alert(d.get("time", ""), temp, THRESHOLD, device)
-                print(f"[告警] {device} 温度 {temp}C 超过 {THRESHOLD}C (已记录)", flush=True)
+                msg = f"[告警] {device} 温度 {temp}C 超过阈值 {THRESHOLD}C (时间 {d.get('time', '')})"
+                print(msg, flush=True)
+                notify.push_alert(msg)
             else:
                 print(f"[抑制] {device} 温度 {temp}C 超限, 但处于冷却期(不重复记录)", flush=True)
 
