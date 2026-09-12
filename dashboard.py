@@ -50,6 +50,12 @@ def on_message(client, userdata, msg):
     print("已入库:", d, flush=True)
 
 mqtt_client = mqtt.Client()
+mqtt_client.reconnect_delay_set(min_delay=1, max_delay=10)
+
+def on_disconnect(c, userdata, rc):
+    print(f"[断线] 与 broker 断开(rc={rc}), 等待自动重连...", flush=True)
+
+mqtt_client.on_disconnect = on_disconnect
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
 mqtt_client.connect(BROKER, PORT)
