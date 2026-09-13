@@ -1,120 +1,141 @@
 # 物联网温湿度监测系统
 
-一个**端到端**的物联网数据采集与可视化项目：模拟传感器采集 → MQTT 上报 → 服务端处理入库 → 网页实时展示与告警。
+一个**端到端**的物联网项目：ESP32 采集真实温湿度 → WiFi/MQTT 上报 → 服务端订阅入库 → 网页大屏实时展示与告警。项目同时支持 Python 模拟设备接入，便于在无硬件时开发调试。
 
-![大屏效果](docs/dashboard.png)
+![真实设备数据](docs/dashboard-real-device.png)
 
 ## ✨ 功能特性
 
-- **数据采集**：定时采集温湿度数据，支持命令行参数配置采集次数与间隔
-- **MQTT 通信**：设备端发布 JSON 数据到主题，服务端订阅处理（发布/订阅解耦）
-- **数据持久化**：存入 **SQLite 数据库**（`readings` 表），支持高效查询与统计
-- **历史查询与统计**：提供 `/api/history`、`/api/stats` 接口（平均值/最高/最低/总数）
-- **实时可视化**：Flask + Chart.js 网页大屏，实时曲线 + 数字卡片 + 历史趋势
-- **告警系统**：超阈值自动告警，写入 `alerts` 表；**告警抑制**（冷却时间）防止告警风暴
-- **断线重连**：MQTT 客户端自动重连，采用**退避策略**（1s→10s）避免雪崩
-- **离线缓存补发**：断网期间数据先存本地队列，网络恢复后自动补发，**不丢数据**
+- **真实硬件采集**：ESP32 + DHT11 通过 MicroPython 采集温湿度
+- **无线通信**：ESP32 经 WiFi 连接 MQTT Broker，以 JSON 格式上报数据
+- **模拟设备**：无硬件时可运行 `sensor_publisher.py`，链路与真实设备完全一致
+- **数据持久化**：SQLite 数据库（`readings` / `alerts` 双表），支持表结构演进
+- **实时可视化**：Flask + Chart.js 大屏，实时曲线 + 温湿度统计 + 告警列表
+- **告警系统**：阈值告警 + 10 秒冷却抑制（防告警风暴），可 Webhook 推送（钉钉/企业微信）
+- **可靠性机制**：MQTT 指数退避重连（1~10 秒）+ 断网本地队列缓存与恢复补发
+- **数据导出**：JSON Lines / CSV 导出与日报生成
 
 ## 🏗️ 系统架构
 
 ```
-┌──────────────┐   发布    ┌────────────┐   订阅    ┌────────────────────┐
-│ 设备端        │ ───────> │  MQTT      │ ───────> │  服务端             │
-│ sensor_      │          │  Broker    │          │  data_collector.py │
-│ publisher.py │          │ (mosquitto)│          │  dashboard.py      │
-│ (离线缓存)    │          └────────────┘          └─────────┬──────────┘
-└──────────────┘                                            │
-                                                   ┌────────▼────────┐
-                                                   │  SQLite 数据库    │
-                                                   │ readings/alerts │
-                                                   └────────┬────────┘
-                                                            │
-                                                   ┌────────▼────────┐
-                                                   │ 网页大屏 (Flask)  │
-                                                   │ 实时曲线/统计/告警 │
-                                                   └─────────────────┘
+┌───────────────┐   WiFi    ┌───────────────┐   订阅   ┌───────────────────┐
+│ ESP32 + DHT11 │ ────────> │ broker.emqx.io│ ──────> │ dashboard.py      │
+│  MicroPython  │   MQTT    │   (云端)       │         │ Flask + Chart.js  │
+│  (真实设备)    │           └───────────────┘         └─────────┬─────────┘
+└───────────────┘                                               │
+        ↑ 可选                                                ▼
+┌───────────────┐                                     ┌───────────────────┐
+│ sensor_       │ ──── MQTT ────> (同一 broker) ────> │ SQLite            │
+│ publisher.py  │                                     │ readings / alerts │
+│ (模拟设备)     │                                     └───────────────────┘
+└───────────────┘
 ```
+
+## 🧰 硬件清单
+
+| 元件 | 用途 |
+|------|------|
+| ESP32 开发板 | 主控（Wi-Fi + 蓝牙，双核 240MHz，CH340 串口） |
+| DHT11 温湿度传感器模块 | 环境温湿度采集（单总线协议） |
+| LED + 220Ω 电阻 | GPIO 输出实验 |
+| 按键开关 | GPIO 输入实验（内部上拉，低电平有效） |
+| 面包板 + 杜邦线 | 电路搭建 |
+
+### 接线示意图
+
+| 外接 LED | DHT11 温湿度传感器 |
+|---|---|
+| ![LED 接线](docs/wiring_led.png) | ![DHT11 接线](docs/wiring_dht.png) |
 
 ## 🛠️ 技术栈
 
 | 类别 | 技术 |
 |------|------|
-| 语言 | Python 3.10 |
-| 通信协议 | MQTT (paho-mqtt)、HTTP |
-| 消息中间件 | Mosquitto Broker |
-| 数据存储 | SQLite3（嵌入式数据库） |
-| Web 框架 | Flask |
-| 前端图表 | Chart.js |
+| 设备端 | ESP32 · MicroPython · DHT11 · GPIO |
+| 通信协议 | MQTT（paho-mqtt / umqtt.simple）· HTTP |
+| 消息中间件 | Mosquitto（本地）· EMQX 公共 Broker（云端） |
+| 数据存储 | SQLite3 |
+| 服务端 | Python 3.10 · Flask |
+| 前端 | Chart.js |
 | 数据格式 | JSON / JSON Lines / CSV |
-| 开发环境 | WSL2 + Ubuntu 22.04、Linux 命令行、Git |
+| 开发环境 | WSL2 + Ubuntu 22.04 · Thonny · Git |
 
 ## 📁 目录结构
 
 ```
 iot-lab/
-├── sensor_lib.py          # 传感器数据模块(采集/判断/统计)
-├── db.py                  # SQLite 存储模块(readings/alerts 表)
-├── sensor_publisher.py    # 设备端: 采集+发布(含离线缓存补发)
-├── data_collector.py      # 服务端: 订阅+入库+告警
-├── dashboard.py           # 网页大屏(Flask + MQTT + SQLite)
-├── query_db.py            # 命令行 SQL 查询工具(练习/排障)
-├── collect_tool.py        # 命令行采集工具(定时采集+报告)
-├── start_broker.sh        # 一键启动 MQTT Broker
-├── start_demo.sh          # 一键启动完整演示
-├── docs/dashboard.png     # 大屏效果截图
+├── esp32/                      # 设备端 (MicroPython)
+│   ├── main.py                 # 主程序: WiFi + DHT11 + MQTT 上报
+│   ├── wifi_config.example.py  # WiFi 配置模板(真实配置不入库)
+│   ├── simple.py               # umqtt.simple MQTT 客户端库
+│   └── 01_blink.py ~ 10_wifi_test.py  # 分步实验(点灯/按键/传感器/WiFi)
+├── sensor_publisher.py         # 模拟设备: 发布数据
+├── data_collector.py           # 服务端: 订阅 + 入库 + 告警
+├── dashboard.py                # 网页大屏 (Flask + MQTT + SQLite)
+├── db.py                       # 数据库模块 (readings / alerts)
+├── sensor_lib.py               # 传感器数据模块
+├── notify.py                   # 告警推送模块 (Webhook)
+├── query_db.py                 # 命令行 SQL 查询工具
+├── report.py                   # 日报生成器
+├── start_broker.sh             # 一键启动本地 MQTT Broker
+├── start_demo.sh               # 一键启动完整演示
+├── docs/                       # 接线图与效果截图
 └── README.md
 ```
 
 ## 🚀 运行方法
 
+### 服务端（电脑 / WSL）
+
 ```bash
-# 1. 启动 MQTT Broker
-~/iot-lab/start_broker.sh
-
-# 2. 启动网页大屏(后台)
 cd ~/iot-lab
+
+# 1. 启动网页大屏(连接公共 broker)
 nohup python3 dashboard.py > /tmp/dashboard.log 2>&1 &
+# 浏览器打开 http://localhost:5000
 
-# 3. 浏览器打开 http://localhost:5000
-
-# 4. 模拟设备上报数据(次数 间隔秒)
+# 2.（可选）启动本地 broker + 模拟设备
+./start_broker.sh
 python3 sensor_publisher.py 30 1
 
-# 5. 服务端订阅入库(可选, 与大屏二选一或并存)
+# 3.（可选）服务端订阅入库与告警
 python3 data_collector.py
 ```
 
-## 🔍 运维/排障
+### 设备端（ESP32）
+
+1. 用 Thonny 给 ESP32 烧录 MicroPython 固件
+2. 把 `esp32/simple.py` 与 `esp32/main.py` 上传到开发板
+3. 复制 `esp32/wifi_config.example.py` 为 `esp32/wifi_config.py`，填入 WiFi 名称与密码（仅支持 2.4GHz）
+4. 接线：DHT11 的 VCC→3V3、DATA→GPIO5、GND→GND
+5. 运行 `main.py`，即可在网页大屏看到真实数据
+
+### 数据处理与排障
 
 ```bash
-# 查询数据库统计
-python3 query_db.py
-
-# 查询温度最高的 3 条
-python3 query_db.py "SELECT time, temp FROM readings ORDER BY temp DESC LIMIT 3"
-
-# 查询告警记录
+python3 query_db.py                                    # 查看统计
 python3 query_db.py "SELECT * FROM alerts ORDER BY id DESC LIMIT 5"
-
-# 查看大屏日志(含断线重连记录)
-tail -f /tmp/dashboard.log
+python3 report.py                                      # 生成日报 + CSV
+tail -f /tmp/dashboard.log | grep --line-buffered -E "告警|推送"
 ```
 
 ## 💡 关键技术点（面试可展开）
 
-1. **发布/订阅解耦**：设备端与服务端互不感知，只依赖 Broker 与主题
-2. **主题设计**：`iot/xcn666/#` 通配符订阅 vs 精确订阅的取舍
-3. **告警抑制**：冷却时间避免告警风暴；**数据不丢，仅告警去重**
-4. **退避重连**：1s→10s 指数退避，避免海量设备同时重连打垮服务端
-5. **离线补传**：断网写入本地队列，恢复后先补发再采新，保证数据完整与时序
-6. **存储分层**：JSON Lines 便于追加日志，SQLite 便于查询统计
+1. **端到端链路设计**：传感器 → MCU → 无线通信 → 云 Broker → 应用服务 → 可视化
+2. **MQTT 发布/订阅解耦**：主题分层设计（`iot/设备ID/数据类型`）、通配符订阅、QoS、Retain、遗嘱消息
+3. **单总线传感器编程**：DHT11 时序要求、采样间隔限制、型号与数据帧格式差异（DHT11/DHT22 数值缩放不同）
+4. **GPIO 输入输出**：上拉电阻消除悬空抖动、按键去抖、低电平有效设计
+5. **告警工程设计**：阈值判断 + 冷却抑制避免告警风暴；**数据不丢，仅告警去重**
+6. **可靠性机制**：指数退避重连、断网本地队列缓存与恢复补发
+7. **数据库设计**：双表结构、PRAGMA + ALTER TABLE 平滑迁移、聚合统计
+8. **敏感配置管理**：WiFi 凭据与 Webhook 地址通过 `.gitignore` 隔离，不进入版本库
 
 ## 🔭 后续计划
 
-- [ ] 接入真实硬件（ESP32 + DHT22 温湿度传感器 + OLED 显示）
-- [ ] 数据接入云平台（阿里云 IoT / EMQX Cloud）
-- [ ] 告警推送（微信/钉钉/邮件通知）
+- [ ] 接入 OLED 显示屏，实现本地数据显示
+- [ ] 增加历史数据查询页面与告警推送通知
+- [ ] 支持多设备接入与设备管理
 
 ## 👤 作者
 
-xcn666 · 2026
+徐钏楠 · 2026

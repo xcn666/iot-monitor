@@ -4,7 +4,7 @@ import json
 import paho.mqtt.client as mqtt
 import db
 
-BROKER = "localhost"
+BROKER = "broker.emqx.io"
 PORT = 1883
 TOPIC = "iot/xcn666/#"
 THRESHOLD = 30

@@ -10,7 +10,7 @@ import paho.mqtt.client as mqtt
 import db
 import notify
 
-BROKER = "localhost"
+BROKER = "broker.emqx.io"
 PORT = 1883
 TOPIC = "iot/xcn666/#"
 THRESHOLD = 30

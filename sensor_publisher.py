@@ -7,7 +7,7 @@ import time
 import paho.mqtt.client as mqtt
 import sensor_lib
 
-BROKER = "localhost"
+BROKER = "broker.emqx.io"
 PORT = 1883
 TOPIC = "iot/xcn666/sensor"
 QUEUE = os.path.expanduser("~/iot-lab/logs/offline_queue.jsonl")
