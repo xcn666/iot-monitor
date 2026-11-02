@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 # data_collector.py - 订阅设备数据, 写入 SQLite 并告警
 import json
+import os
 import paho.mqtt.client as mqtt
 import db
 
-BROKER = "broker.emqx.io"
-PORT = 1883
-TOPIC = "iot/xcn666/#"
-THRESHOLD = 30
-
+BROKER = os.getenv("IOT_MQTT_BROKER", "broker.emqx.io")
+PORT = int(os.getenv("IOT_MQTT_PORT", "1883"))
+TOPIC = os.getenv("IOT_MQTT_TOPIC", "iot/xcn666/#")
 db.init_db()
 
 def on_connect(client, userdata, flags, rc):
@@ -22,10 +21,17 @@ def on_message(client, userdata, msg):
         return
     if "temp" not in data:
         return
-    db.insert_reading(data.get("time", ""), data.get("temp"), data.get("hum", 0), data.get("device", ""))
+    device = data.get("device", "")
+    db.insert_reading(data.get("time", ""), data.get("temp"), data.get("hum", 0), device)
     print(f"[入库] temp={data['temp']}C hum={data.get('hum')}%", flush=True)
-    if data["temp"] > THRESHOLD:
-        print(f"  >>> 告警! 温度 {data['temp']}C 超过 {THRESHOLD}C", flush=True)
+    triggered = db.evaluate_alert_rules(
+        data.get("time", ""), {"temp": data.get("temp"), "hum": data.get("hum")}, device
+    )
+    for rule in triggered:
+        print(
+            f"  >>> 告警! 规则 #{rule['id']} {rule['field']} {rule['operator']} {rule['threshold']}",
+            flush=True,
+        )
 
 client = mqtt.Client()
 client.on_connect = on_connect

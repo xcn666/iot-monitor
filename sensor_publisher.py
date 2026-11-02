@@ -7,9 +7,9 @@ import time
 import paho.mqtt.client as mqtt
 import sensor_lib
 
-BROKER = "broker.emqx.io"
-PORT = 1883
-TOPIC = "iot/xcn666/sensor"
+BROKER = os.getenv("IOT_MQTT_BROKER", "broker.emqx.io")
+PORT = int(os.getenv("IOT_MQTT_PORT", "1883"))
+TOPIC = os.getenv("IOT_MQTT_PUBLISH_TOPIC", "iot/xcn666/sensor")
 QUEUE = os.path.expanduser("~/iot-lab/logs/offline_queue.jsonl")
 
 count = int(sys.argv[1]) if len(sys.argv) > 1 else 5

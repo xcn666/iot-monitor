@@ -3,6 +3,7 @@
 import csv as csv_mod
 import io
 import json
+import os
 import threading
 import time
 from flask import Flask, Response, jsonify, render_template_string, request
@@ -10,20 +11,16 @@ import paho.mqtt.client as mqtt
 import db
 import notify
 
-BROKER = "broker.emqx.io"
-PORT = 1883
-TOPIC = "iot/xcn666/#"
-THRESHOLD = 30
-ALERT_COOLDOWN = 10
-HISTORY_LIMIT = 60
+BROKER = os.getenv("IOT_MQTT_BROKER", "broker.emqx.io")
+PORT = int(os.getenv("IOT_MQTT_PORT", "1883"))
+TOPIC = os.getenv("IOT_MQTT_TOPIC", "iot/xcn666/#")
+HISTORY_LIMIT = int(os.getenv("IOT_HISTORY_LIMIT", "60"))
 
 app = Flask(__name__)
 lock = threading.Lock()
-last_alert = {}
-db.init_db()
 
 
-def on_connect(client, userdata, flags, rc):
+def on_connect(client, userdata, flags, rc, properties=None):
     print("已连接 broker, 订阅", TOPIC, flush=True)
     client.subscribe(TOPIC)
 
@@ -38,36 +35,45 @@ def on_message(client, userdata, msg):
 
     temp = d["temp"]
     device = d.get("device", "unknown")
-    now = time.time()
 
     with lock:
         db.insert_reading(d.get("time", ""), temp, d.get("hum", 0), device)
-        if temp > THRESHOLD:
-            if now - last_alert.get(device, 0) >= ALERT_COOLDOWN:
-                last_alert[device] = now
-                db.insert_alert(d.get("time", ""), temp, THRESHOLD, device)
-                msg_txt = f"[告警] {device} 温度 {temp}C 超过阈值 {THRESHOLD}C (时间 {d.get('time', '')})"
-                print(msg_txt, flush=True)
-                notify.push_alert(msg_txt)
-            else:
-                print(f"[抑制] {device} {temp}C 处于冷却期", flush=True)
+        triggered = db.evaluate_alert_rules(
+            d.get("time", ""), {"temp": temp, "hum": d.get("hum")}, device, time.time()
+        )
+        for rule in triggered:
+            label = "温度" if rule["field"] == "temp" else "湿度"
+            operator = {"gt": ">", "gte": "≥", "lt": "<", "lte": "≤"}[rule["operator"]]
+            msg_txt = (
+                f"[告警] {device} {label} {rule['value']} {operator} "
+                f"{rule['threshold']} (规则 #{rule['id']}, 时间 {rule['time']})"
+            )
+            print(msg_txt, flush=True)
+            notify.push_alert(msg_txt)
     print("已入库:", d, flush=True)
 
 
-mqtt_client = mqtt.Client()
+try:
+    mqtt_client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+except (AttributeError, TypeError):
+    mqtt_client = mqtt.Client()
 mqtt_client.reconnect_delay_set(min_delay=1, max_delay=10)
 
 
-def on_disconnect(c, userdata, rc):
-    if rc != 0:
-        print(f"[断线] 与 broker 断开(rc={rc}), 等待自动重连...", flush=True)
+def on_disconnect(c, userdata, disconnect_flags, reason_code=None, properties=None):
+    reason = disconnect_flags if reason_code is None else reason_code
+    if hasattr(reason, "value"):
+        reason = reason.value
+    if reason != 0:
+        print(f"[断线] 与 broker 断开(rc={reason}), 等待自动重连...", flush=True)
 
 
-mqtt_client.on_disconnect = on_disconnect
-mqtt_client.on_connect = on_connect
-mqtt_client.on_message = on_message
-mqtt_client.connect(BROKER, PORT)
-mqtt_client.loop_start()
+def start_mqtt():
+    mqtt_client.on_disconnect = on_disconnect
+    mqtt_client.on_connect = on_connect
+    mqtt_client.on_message = on_message
+    mqtt_client.connect(BROKER, PORT)
+    mqtt_client.loop_start()
 
 PAGE = """<!DOCTYPE html>
 <html lang="zh-CN">
@@ -328,8 +334,11 @@ function renderAlerts(alerts, isNewTop) {
   if (!alerts.length) { box.innerHTML = '<div class="empty">暂无告警</div>'; return; }
   box.innerHTML = alerts.map(function (a, i) {
     const cls = (isNewTop && i === 0) ? 'alert-item new' : 'alert-item';
+    const field = a.field === 'hum' ? '湿度' : '温度';
+    const unit = a.field === 'hum' ? '%' : ' °C';
+    const operator = ({gt: '>', gte: '≥', lt: '<', lte: '≤'})[a.operator] || '>';
     return '<div class="' + cls + '"><div class="alert-time">' + a.time + '</div>' +
-      '<div class="alert-body">温度 <b>' + a.temp + ' °C</b> 超过阈值 ' + a.threshold + ' °C</div></div>';
+      '<div class="alert-body">' + field + ' <b>' + a.value + unit + '</b> ' + operator + ' 阈值 ' + a.threshold + unit + '</div></div>';
   }).join('');
 }
 
@@ -339,12 +348,13 @@ function setRing(el, pct) {
 }
 
 async function refresh() {
-  const [hRes, sRes, aRes] = await Promise.all([
-    fetch('/api/history?limit=60'), fetch('/api/stats'), fetch('/api/alerts?limit=6')
+  const [hRes, sRes, aRes, rRes] = await Promise.all([
+    fetch('/api/history?limit=60'), fetch('/api/stats'), fetch('/api/alerts?limit=6'), fetch('/api/rules')
   ]);
   const history = await hRes.json();
   const s = await sRes.json();
   const alerts = await aRes.json();
+  const rules = await rRes.json();
 
   if (history.length) {
     chart.data.labels = history.map(d => d.time);
@@ -360,9 +370,19 @@ async function refresh() {
     setRing(document.getElementById('humRing'), last.hum / 100);
 
     const pill = document.getElementById('statusPill');
-    const warn = last.temp > 30;
+    const warn = rules.some(function (rule) {
+      if (!rule.enabled || (rule.device && rule.device !== last.device)) return false;
+      const value = last[rule.field];
+      if (typeof value !== 'number') return false;
+      return ({
+        gt: value > rule.threshold,
+        gte: value >= rule.threshold,
+        lt: value < rule.threshold,
+        lte: value <= rule.threshold
+      })[rule.operator] || false;
+    });
     pill.classList.toggle('warn', warn);
-    document.getElementById('statusText').textContent = warn ? '温度超限' : '实时在线';
+    document.getElementById('statusText').textContent = warn ? '规则触发' : '实时在线';
   }
 
   document.getElementById('count').innerHTML = s.count + '<small>条</small>';
@@ -377,7 +397,7 @@ async function refresh() {
   // 只有告警内容变化时才重绘(避免每2秒重放动画造成闪烁)
   const sig = JSON.stringify(alerts);
   if (sig !== alertSig) {
-    const topKey = alerts.length ? (alerts[0].time + '|' + alerts[0].temp) : '';
+    const topKey = alerts.length ? (alerts[0].time + '|' + alerts[0].field + '|' + alerts[0].value) : '';
     const isNewTop = topKey !== alertTopKey;
     alertTopKey = topKey;
     alertSig = sig;
@@ -411,6 +431,11 @@ def api_alerts():
     return jsonify(db.recent_alerts(request.args.get("limit", 10, type=int)))
 
 
+@app.route("/api/rules")
+def api_rules():
+    return jsonify(db.list_alert_rules(enabled_only=True))
+
+
 @app.route("/api/export")
 def api_export():
     rows = db.all_rows()
@@ -424,5 +449,7 @@ def api_export():
 
 
 if __name__ == "__main__":
+    db.init_db()
     print("大屏已启动: http://localhost:5000", flush=True)
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    start_mqtt()
+    app.run(host="0.0.0.0", port=int(os.getenv("IOT_DASHBOARD_PORT", "5000")), debug=False)
